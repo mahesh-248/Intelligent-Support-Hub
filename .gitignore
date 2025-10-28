@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment Variables
+.env
+*.env
+!.env.example
+
+# Logs
+*.log
+logs/
+app.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# GCP
+service-account-key.json
+*.json
+!package.json
+!tsconfig.json
+
+# BigQuery
+.bigquery/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Data
+data/
+*.csv
+*.parquet
+*.db
+
+# Temporary
+tmp/
+temp/
+*.tmp
