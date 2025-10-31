@@ -1,31 +1,229 @@
 """
-Sample Data Generator for Support Tickets
+Amazon Fine Food Reviews Data Loader
 
-Generates realistic support ticket data for testing and demonstration.
-Creates a diverse dataset with various categories, priorities, and resolutions.
+Loads and processes Amazon Fine Food Reviews dataset for semantic search.
+The dataset includes reviews from Oct 1999 - Oct 2012, with 568,454 reviews
+covering 256,059 users and 74,258 products.
 
-Categories covered:
-- Authentication & Login
-- Performance & Speed
-- Payment & Billing
-- Features & Functionality
-- Bugs & Errors
-- Account Management
+Dataset columns:
+- Id: Review ID
+- ProductId: Unique product identifier
+- UserId: Unique user identifier
+- ProfileName: User profile name
+- HelpfulnessNumerator: Number of users who found the review helpful
+- HelpfulnessDenominator: Number of users who indicated whether they found the review helpful
+- Score: Rating (1-5 stars)
+- Time: Timestamp of the review (Unix time)
+- Summary: Brief review summary
+- Text: Full review text
 """
 
-import random
-from datetime import datetime, timedelta
-from typing import List, Dict, Any
+import os
 import pandas as pd
 import logging
+from datetime import datetime
+from typing import Optional, Dict, List
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-class TicketDataGenerator:
-    """Generate realistic support ticket data."""
+class ReviewDataLoader:
+    """Load and process Amazon Fine Food Reviews data."""
     
-    # Ticket templates by category
+    def __init__(self, csv_path: str = "Reviews.csv", sample_size: Optional[int] = None):
+        """
+        Initialize the review data loader.
+        
+        Args:
+            csv_path: Path to the Reviews.csv file
+            sample_size: Optional number of reviews to sample (None = load all)
+        """
+        self.csv_path = csv_path
+        self.sample_size = sample_size
+        
+        # Check if file exists
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(
+                f"Reviews.csv not found at {csv_path}. "
+                f"Please download from https://www.kaggle.com/datasets/snap/amazon-fine-food-reviews"
+            )
+    
+    def load_reviews(self) -> pd.DataFrame:
+        """
+        Load Amazon Fine Food Reviews from CSV.
+        
+        Returns:
+            DataFrame with processed review data
+        """
+        logger.info(f"Loading Amazon Fine Food Reviews from {self.csv_path}...")
+        
+        try:
+            # Load CSV
+            df = pd.read_csv(self.csv_path)
+            logger.info(f"Loaded {len(df)} reviews")
+            
+            # Sample if requested
+            if self.sample_size and self.sample_size < len(df):
+                df = df.sample(n=self.sample_size, random_state=42)
+                logger.info(f"Sampled {len(df)} reviews")
+            
+            # Process and enrich the data
+            df = self._process_reviews(df)
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading reviews: {e}")
+            raise
+    
+    def _process_reviews(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Process and enrich review data for BigQuery.
+        
+        Args:
+            df: Raw review DataFrame
+            
+        Returns:
+            Processed DataFrame ready for BigQuery
+        """
+        logger.info("Processing review data...")
+        
+        # Rename columns to match our schema
+        processed = pd.DataFrame()
+        
+        processed['review_id'] = df['Id'].astype(str)
+        processed['product_id'] = df['ProductId']
+        processed['user_id'] = df['UserId']
+        processed['profile_name'] = df['ProfileName'].fillna('Anonymous')
+        processed['helpfulness_numerator'] = df['HelpfulnessNumerator']
+        processed['helpfulness_denominator'] = df['HelpfulnessDenominator']
+        processed['score'] = df['Score']
+        processed['time_unix'] = df['Time']
+        processed['summary'] = df['Summary'].fillna('')
+        processed['text'] = df['Text'].fillna('')
+        
+        # Convert Unix timestamp to datetime
+        processed['review_date'] = pd.to_datetime(processed['time_unix'], unit='s')
+        
+        # Calculate helpfulness ratio
+        processed['helpfulness_ratio'] = np.where(
+            processed['helpfulness_denominator'] > 0,
+            processed['helpfulness_numerator'] / processed['helpfulness_denominator'],
+            0.0
+        )
+        
+        # Create combined text for embedding (summary + text)
+        processed['combined_text'] = (
+            processed['summary'].str.strip() + '. ' + 
+            processed['text'].str.strip()
+        ).str.strip()
+        
+        # Categorize reviews by score
+        processed['sentiment_category'] = processed['score'].map({
+            1: 'Very Negative',
+            2: 'Negative',
+            3: 'Neutral',
+            4: 'Positive',
+            5: 'Very Positive'
+        })
+        
+        # Flag helpful reviews (helpful ratio > 0.7 and at least 5 votes)
+        processed['is_helpful'] = (
+            (processed['helpfulness_ratio'] >= 0.7) & 
+            (processed['helpfulness_denominator'] >= 5)
+        )
+        
+        # Calculate text length
+        processed['text_length'] = processed['text'].str.len()
+        processed['summary_length'] = processed['summary'].str.len()
+        
+        # Add created/updated timestamps
+        processed['created_at'] = processed['review_date']
+        processed['updated_at'] = processed['review_date']
+        
+        logger.info(f"Processed {len(processed)} reviews")
+        logger.info(f"Score distribution:\n{processed['score'].value_counts().sort_index()}")
+        logger.info(f"Helpful reviews: {processed['is_helpful'].sum()}")
+        
+        return processed
+    
+    def get_sample_queries(self) -> List[Dict[str, str]]:
+        """
+        Get sample search queries for testing semantic search.
+        
+        Returns:
+            List of sample query dicts
+        """
+        return [
+            {
+                'query': 'delicious chocolate candy sweet',
+                'description': 'Search for sweet chocolate products'
+            },
+            {
+                'query': 'healthy organic natural ingredients',
+                'description': 'Find organic and healthy food reviews'
+            },
+            {
+                'query': 'bad taste terrible quality disappointing',
+                'description': 'Find negative reviews about taste'
+            },
+            {
+                'query': 'great price value for money affordable',
+                'description': 'Reviews mentioning good value'
+            },
+            {
+                'query': 'coffee beans strong flavor aroma',
+                'description': 'Coffee-related reviews'
+            },
+            {
+                'query': 'dog food pet nutrition',
+                'description': 'Pet food reviews'
+            },
+            {
+                'query': 'packaging damaged arrived broken',
+                'description': 'Reviews about shipping/packaging issues'
+            },
+            {
+                'query': 'tasty snack kids love',
+                'description': 'Kid-friendly snack reviews'
+            }
+        ]
+    
+    def get_statistics(self, df: pd.DataFrame) -> Dict:
+        """
+        Get dataset statistics.
+        
+        Args:
+            df: Review DataFrame
+            
+        Returns:
+            Dictionary with statistics
+        """
+        stats = {
+            'total_reviews': len(df),
+            'unique_products': df['product_id'].nunique(),
+            'unique_users': df['user_id'].nunique(),
+            'date_range': {
+                'start': df['review_date'].min().strftime('%Y-%m-%d'),
+                'end': df['review_date'].max().strftime('%Y-%m-%d')
+            },
+            'score_distribution': df['score'].value_counts().to_dict(),
+            'helpful_reviews': int(df['is_helpful'].sum()),
+            'avg_helpfulness_ratio': float(df['helpfulness_ratio'].mean()),
+            'avg_text_length': float(df['text_length'].mean())
+        }
+        return stats
+
+
+# Legacy class kept for backward compatibility
+class TicketDataGenerator:
+    """
+    DEPRECATED: Legacy class for ticket generation.
+    Use ReviewDataLoader instead for Amazon Fine Food Reviews.
+    """
+    
+    # Old ticket templates (keeping minimal structure for backward compatibility)
     TEMPLATES = {
         'Authentication': [
             {
@@ -403,14 +601,39 @@ class TicketDataGenerator:
 
 
 if __name__ == "__main__":
-    # Test data generation
-    generator = TicketDataGenerator()
-    df = generator.generate_tickets(count=50)
+    # Test review data loading
+    logging.basicConfig(level=logging.INFO)
     
-    print(f"\n✅ Generated {len(df)} tickets")
-    print(f"\nCategory distribution:")
-    print(df['category'].value_counts())
-    print(f"\nStatus distribution:")
-    print(df['status'].value_counts())
-    print(f"\nSample ticket:")
-    print(df[['ticket_id', 'title', 'category', 'status']].head(3).to_string(index=False))
+    try:
+        # Load reviews (sample first 1000 for testing)
+        loader = ReviewDataLoader(csv_path="Reviews.csv", sample_size=1000)
+        df = loader.load_reviews()
+        
+        print(f"\n✅ Loaded {len(df)} reviews")
+        
+        # Display statistics
+        stats = loader.get_statistics(df)
+        print(f"\n📊 Dataset Statistics:")
+        print(f"  Total Reviews: {stats['total_reviews']}")
+        print(f"  Unique Products: {stats['unique_products']}")
+        print(f"  Unique Users: {stats['unique_users']}")
+        print(f"  Date Range: {stats['date_range']['start']} to {stats['date_range']['end']}")
+        print(f"  Helpful Reviews: {stats['helpful_reviews']}")
+        print(f"\n⭐ Score Distribution:")
+        for score in sorted(stats['score_distribution'].keys()):
+            count = stats['score_distribution'][score]
+            print(f"  {score} stars: {count} ({count/stats['total_reviews']*100:.1f}%)")
+        
+        print(f"\n📝 Sample Reviews:")
+        sample = df[['review_id', 'score', 'summary', 'sentiment_category', 'is_helpful']].head(5)
+        print(sample.to_string(index=False))
+        
+        print(f"\n🔍 Sample Queries:")
+        for i, query in enumerate(loader.get_sample_queries()[:3], 1):
+            print(f"  {i}. {query['description']}: '{query['query']}'")
+            
+    except FileNotFoundError as e:
+        print(f"\n❌ Error: {e}")
+        print("\n📥 Please download the dataset from:")
+        print("   https://www.kaggle.com/datasets/snap/amazon-fine-food-reviews")
+        print("   and place Reviews.csv in the project root directory.")
